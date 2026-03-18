@@ -31,4 +31,4 @@ Source: [https://www.kaggle.com/datasets/uniabhi/ibm-hr-analytics-employee-attri
 
 # Author
 
-Caleb Ramsey - 
+Caleb Ramsey - Statistics & Sports Media and Analytics (Virginia Tech)
