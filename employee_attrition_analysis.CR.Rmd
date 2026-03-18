@@ -1,0 +1,283 @@
+---
+title: "Employee Attrition Analysis"
+author: "Caleb Ramsey"
+date: "2026-03-15"
+output:
+  pdf_document:
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(forcats)
+
+Employee_Attrition <- read_csv("HR-Employee-Attrition.csv")
+
+Employee_Attrition <- Employee_Attrition %>%
+  mutate(
+    Attrition_Flag = if_else(Attrition == "Yes", 1, 0),
+    `Tenure Length` = case_when(
+      YearsAtCompany <= 2 ~ "0-2 Years",
+      YearsAtCompany <= 5 ~ "3-5 Years",
+      YearsAtCompany <= 10 ~ "6-10 Years",
+      TRUE ~ "11+ Years"
+    ),
+    `Tenure Length` = factor(
+      `Tenure Length`,
+      levels = c("0-2 Years", "3-5 Years", "6-10 Years", "11+ Years")
+    ),
+    OverTime = factor(OverTime, levels = c("No", "Yes"))
+  )
+
+overall_attrition <- Employee_Attrition %>%
+  count(Attrition) %>%
+  mutate(percent = percent(n / sum(n), accuracy = 0.1))
+
+dept_attrition <- Employee_Attrition %>%
+  group_by(Department) %>%
+  summarise(attrition_rate = mean(Attrition_Flag), .groups = "drop") %>%
+  arrange(desc(attrition_rate))
+
+overtime_attrition <- Employee_Attrition %>%
+  group_by(OverTime) %>%
+  summarise(attrition_rate = mean(Attrition_Flag), .groups = "drop")
+
+tenure_attrition <- Employee_Attrition %>%
+  group_by(`Tenure Length`) %>%
+  summarise(attrition_rate = mean(Attrition_Flag), .groups = "drop")
+
+income_attrition <- Employee_Attrition %>%
+  group_by(Attrition) %>%
+  summarise(`Avg Monthly Income` = round(mean(MonthlyIncome, na.rm = TRUE), 0), .groups = "drop")
+
+jobrole_attrition <- Employee_Attrition %>%
+  group_by(JobRole) %>%
+  summarise(attrition_rate = mean(Attrition_Flag), .groups = "drop") %>%
+  arrange(desc(attrition_rate))
+
+attrition_model <- glm(
+  Attrition_Flag ~ OverTime + MonthlyIncome + Age + YearsAtCompany + JobSatisfaction,
+  data = Employee_Attrition,
+  family = binomial()
+)
+
+model_results <- data.frame(
+  term = names(coef(attrition_model)),
+  estimate = coef(attrition_model),
+  stringsAsFactors = FALSE
+) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    effect_direction = case_when(
+      odds_ratio > 1 ~ "Higher attrition odds",
+      odds_ratio < 1 ~ "Lower attrition odds",
+      TRUE ~ "No change"
+    ),
+    odds_ratio = round(odds_ratio, 3)
+  ) %>%
+  select(term, odds_ratio, effect_direction)
+
+model_plot_data <- model_results %>%
+  mutate(term = factor(term, levels = rev(term)))
+```
+
+# Overview
+
+This report explores employee attrition patterns across department, overtime status, tenure, income, and job role to identify where turnover appears most concentrated. It also includes a simple logistic regression model to test whether some of these patterns still matter when several employee characteristics are considered at the same time.
+
+# Overall Attrition
+
+The dataset shows the split between employees who stayed and employees who left.
+
+```{r ovr-rate}
+overall_attrition
+```
+
+# Attrition by Department
+
+Department-level attrition is not evenly distributed, with some groups appearing to lose employees at a higher rate.
+
+```{r by-department-table}
+dept_attrition %>%
+  mutate(attrition_rate = percent(attrition_rate, accuracy = 0.1))
+```
+
+```{r by-department-plot, fig.width=7.4, fig.height=4.8}
+dept_attrition %>%
+  ggplot(aes(x = reorder(Department, attrition_rate), y = attrition_rate)) +
+  geom_col(fill = "#4C78A8") +
+  coord_flip() +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Employee Attrition Rate by Department",
+    x = NULL,
+    y = "Attrition Rate"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 10)
+  )
+```
+
+# Attrition by Overtime
+
+Overtime is one of the clearest differences and may indicate a workload-related retention issue.
+
+```{r attr-v-overtime-table}
+overtime_attrition %>%
+  mutate(attrition_rate = percent(attrition_rate, accuracy = 0.1))
+```
+
+```{r by-overtime-plot, fig.width=6.8, fig.height=4.6}
+overtime_attrition %>%
+  ggplot(aes(x = OverTime, y = attrition_rate, fill = OverTime)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("No" = "#9ecae1", "Yes" = "#08519c")) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Employee Attrition Rate by Overtime Status",
+    x = NULL,
+    y = "Attrition Rate"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 10)
+  )
+```
+
+# Attrition by Tenure
+
+Tenure helps show whether turnover is concentrated among newer employees or more established employees.
+
+```{r attr-by-tenure-table}
+tenure_attrition %>%
+  mutate(attrition_rate = percent(attrition_rate, accuracy = 0.1))
+```
+
+```{r by-tenure-plot, fig.width=7.4, fig.height=4.8}
+tenure_attrition %>%
+  ggplot(aes(x = `Tenure Length`, y = attrition_rate, fill = `Tenure Length`)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c(
+    "0-2 Years" = "#dbe9f6",
+    "3-5 Years" = "#9ecae1",
+    "6-10 Years" = "#4292c6",
+    "11+ Years" = "#08519c"
+  )) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Employee Attrition Rate by Tenure Length",
+    x = NULL,
+    y = "Attrition Rate"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 10)
+  )
+```
+
+# Attrition by Job Role
+
+Job role adds more detail than department and can reveal whether turnover is concentrated in specific positions.
+
+```{r attr-by-jobrole-table}
+jobrole_attrition %>%
+  mutate(attrition_rate = percent(attrition_rate, accuracy = 0.1))
+```
+
+```{r by-jobrole-plot, fig.width=8, fig.height=5.5}
+jobrole_attrition %>%
+  ggplot(aes(x = reorder(JobRole, attrition_rate), y = attrition_rate)) +
+  geom_col(fill = "#4C78A8") +
+  coord_flip() +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Employee Attrition Rate by Job Role",
+    x = NULL,
+    y = "Attrition Rate"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 10)
+  )
+```
+
+# Income Differences
+
+Average monthly income differs between employees who stayed and employees who left, suggesting compensation may be worth evaluating alongside workload and tenure.
+
+```{r attr-vs-income-avg}
+income_attrition
+```
+
+# Exploratory Logistic Model
+
+To move beyond single variable comparisons, a simple logistic regression was fit to estimate how overtime, monthly income, age, years at company, and job satisfaction relate to attrition odds.
+
+```{r logistic-model-table}
+model_results
+```
+
+```{r logistic-model-plot, fig.width=7.2, fig.height=4.8}
+model_plot_data %>%
+  ggplot(aes(x = term, y = odds_ratio)) +
+  geom_col(fill = "#4C78A8") +
+  coord_flip() +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    title = "Exploratory Logistic Model: Odds Ratios for Attrition",
+    x = NULL,
+    y = "Odds Ratio"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 10)
+  )
+```
+
+Firstly, model takeaways should be treated as exploratory rather than causal; they help show which variables continue to stand out when considered together. Overtime has an odds ratio above 1, that suggests employees working overtime face higher attrition odds than those who do not. Age, tenure, and job satisfaction show odds ratios below 1, that suggests those factors are associated with lower attrition odds holding the other variables included in the model constant.
+
+# Model Considerations
+
+```{r model-considerations}
+library(broom)
+
+model_results <- tidy(attrition_model) %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    significant = p.value < 0.05
+  )
+
+model_results
+
+library(car)
+vif(attrition_model)
+```
+# Key Findings
+
+- A logistic regression model was used to evaluate factors associated with employee attrition.
+
+- All predictors included in the model (OverTime, MonthlyIncome, Age, YearsAtCompany, and JobSatisfaction) were statistically significant at the 0.05 level.
+
+- Overtime has the strongest effect, with employees working overtime having approximately 4.27 times higher odds of attrition compared to those who do not. 
+
+- Monthly income, age, tenure, and job satisfaction all show negative relationships with attrition, indicating that higher values in these variables are associated with lower likelihood of leaving. While statistically significant, the effect sizes for income, age, and tenure are relatively moderate compared to overtime.
+
+- Variance Inflation Factors (VIF) for all predictors are near 1, indicating negligible multicollinearity and stable coefficient estimates.
+
+- The results suggest that workload (overtime) and job satisfaction are key drivers of attrition, while demographic and compensation factors play a smaller but still meaningful role.
+
+# Next Steps
+
+A stronger extension would be to compare several different attrition models, add additional predictors such as work-life balance, and evaluate model fit more formally.
